@@ -1,20 +1,46 @@
 {
-    "name": "rajesh/laravel-user-settings",
-    "description": "Application level and user level settings for Laravel application",
+    "name": "hatchyu/laravel-settings",
+    "description": "Enterprise-ready hierarchical multi-scope settings for Laravel with inheritance support, caching, and automatic value casting.",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "Raju Koyilandy",
+            "email": "hello@rajeshmk.com"
+        }
+    ],
     "require": {
-        "php": "^7.3|^8.0",
-        "laravel/framework": "^8.29"
+        "php": "^8.3",
+        "laravel/framework": "^10.0||^11.0||^12.0||^13.0"
+    },
+    "require-dev": {
+        "driftingly/rector-laravel": "^2.3",
+        "laravel/pint": "^1.29",
+        "pestphp/pest": "^4.7",
+        "pestphp/pest-plugin-laravel": "^4.1",
+        "rector/rector": "^2.4"
     },
     "autoload": {
+        "files": [
+            "src/helpers.php"
+        ],
         "psr-4": {
-            "VocoLab\\AppConfig\\": "src/"
+            "Hatchyu\\Settings\\": "src/"
         }
     },
     "extra": {
+        "branch-alias": {
+            "dev-main": "1.x-dev"
+        },
         "laravel": {
             "providers": [
-                "VocoLab\\AppConfig\\AppConfigServiceProvider"
+                "Hatchyu\\Settings\\SettingsServiceProvider"
             ]
+        }
+    },
+    "config": {
+        "sort-packages": true,
+        "allow-plugins": {
+            "pestphp/pest-plugin": true
         }
     },
     "minimum-stability": "dev",

@@ -1,0 +1,811 @@
+Laravel Hierarchical Multi-Scope Settings Package Blueprint
+Suggested Package Structure
+src/
+├── Contracts/
+│   ├── SettingsManager.php
+│   ├── SettingsRepository.php
+│   └── SettingsScope.php
+├── DataTransferObjects/
+│   └── ResolvedSetting.php
+├── Exceptions/
+│   ├── InvalidScopeException.php
+│   ├── SettingNotFoundException.php
+│   └── SettingsValidationException.php
+├── Facades/
+│   └── Settings.php
+├── Managers/
+│   └── SettingsManager.php
+├── Models/
+│   ├── SettingDefinition.php
+│   └── SettingValue.php
+├── Repositories/
+│   ├── CachedSettingsRepository.php
+│   └── DatabaseSettingsRepository.php
+├── Resolvers/
+│   ├── ScopeHierarchyResolver.php
+│   └── ValueCaster.php
+├── Support/
+│   ├── ArrHelper.php
+│   ├── Scope.php
+│   └── SettingsCollection.php
+├── Traits/
+│   └── HasSettings.php
+├── SettingsServiceProvider.php
+└── helpers.php
+
+
+database/
+└── migrations/
+    ├── 2026_05_12_000001_create_setting_definitions_table.php
+    └── 2026_05_12_000002_create_setting_values_table.php
+Migration: create_setting_definitions_table.php
+<?php
+
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+
+return new class extends Migration {
+    public function up(): void
+    {
+        Schema::create('setting_definitions', function (Blueprint $table) {
+            $table->id();
+
+
+            $table->string('key')->unique();
+            $table->string('group')->nullable()->index();
+
+
+            $table->string('label')->nullable();
+            $table->text('description')->nullable();
+
+
+            $table->string('data_type', 50)->default('string');
+
+
+            $table->json('default_value')->nullable();
+
+
+            $table->boolean('is_public')->default(false);
+            $table->boolean('is_encrypted')->default(false);
+            $table->boolean('is_system')->default(false);
+
+
+            $table->json('validation_rules')->nullable();
+
+
+            $table->timestamps();
+
+
+            $table->index(['group']);
+            $table->index(['data_type']);
+        });
+    }
+
+
+    public function down(): void
+    {
+        Schema::dropIfExists('setting_definitions');
+    }
+};
+Migration: create_setting_values_table.php
+<?php
+
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+
+return new class extends Migration {
+    public function up(): void
+    {
+        Schema::create('setting_values', function (Blueprint $table) {
+            $table->id();
+
+
+            $table->foreignId('setting_definition_id')
+                ->constrained('setting_definitions')
+                ->restrictOnDelete();
+
+
+            $table->string('scope_type', 100);
+            $table->string('scope_id', 100)->nullable();
+
+
+            $table->json('value')->nullable();
+
+
+            $table->timestamps();
+
+
+            $table->unique([
+                'setting_definition_id',
+                'scope_type',
+                'scope_id'
+            ], 'setting_scope_unique');
+
+
+            $table->index(['scope_type', 'scope_id']);
+            $table->index(['scope_type']);
+        });
+    }
+
+
+    public function down(): void
+    {
+        Schema::dropIfExists('setting_values');
+    }
+};
+Contract: SettingsScope.php
+<?php
+
+
+namespace Vendor\Settings\Contracts;
+
+
+interface SettingsScope
+{
+    public function getSettingsScopeType(): string;
+
+
+    public function getSettingsScopeId(): int|string;
+
+
+    /**
+     * Used for inheritance.
+     *
+     * Example return:
+     *
+     * [
+     *     [$team],
+     *     [$company],
+     * ]
+     */
+    public function getSettingsFallbackScopes(): array;
+}
+Trait: HasSettings.php
+<?php
+
+
+namespace Vendor\Settings\Traits;
+
+
+use Vendor\Settings\Contracts\SettingsScope;
+use Vendor\Settings\Support\Scope;
+
+
+trait HasSettings
+{
+    public function settings(): Scope
+    {
+        return settings()->scope($this);
+    }
+
+
+    public function getSettingsScopeType(): string
+    {
+        return str($this->getMorphClass())
+            ->afterLast('\\')
+            ->snake()
+            ->toString();
+    }
+
+
+    public function getSettingsScopeId(): int|string
+    {
+        return $this->getKey();
+    }
+
+
+    public function getSettingsFallbackScopes(): array
+    {
+        return [];
+    }
+}
+Model: SettingDefinition.php
+<?php
+
+
+namespace Vendor\Settings\Models;
+
+
+use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Model;
+
+
+class SettingDefinition extends Model
+{
+    use HasFactory;
+
+
+    protected $fillable = [
+        'key',
+        'group',
+        'label',
+        'description',
+        'data_type',
+        'default_value',
+        'is_public',
+        'is_encrypted',
+        'is_system',
+        'validation_rules',
+    ];
+
+
+    protected $casts = [
+        'default_value' => 'array',
+        'validation_rules' => 'array',
+        'is_public' => 'boolean',
+        'is_encrypted' => 'boolean',
+        'is_system' => 'boolean',
+    ];
+
+
+    public function values()
+    {
+        return $this->hasMany(SettingValue::class);
+    }
+}
+Model: SettingValue.php
+<?php
+
+
+namespace Vendor\Settings\Models;
+
+
+use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Model;
+
+
+class SettingValue extends Model
+{
+    use HasFactory;
+
+
+    protected $fillable = [
+        'setting_definition_id',
+        'scope_type',
+        'scope_id',
+        'value',
+    ];
+
+
+    protected $casts = [
+        'value' => 'array',
+    ];
+
+
+    public function definition()
+    {
+        return $this->belongsTo(SettingDefinition::class, 'setting_definition_id');
+    }
+}
+Contract: SettingsRepository.php
+<?php
+
+
+namespace Vendor\Settings\Contracts;
+
+
+interface SettingsRepository
+{
+    public function get(string $key, mixed $default = null): mixed;
+
+
+    public function set(string $key, mixed $value): void;
+
+
+    public function has(string $key): bool;
+
+
+    public function forget(string $key): void;
+
+
+    public function all(?string $prefix = null): array;
+}
+Contract: SettingsManager.php
+<?php
+
+
+namespace Vendor\Settings\Contracts;
+
+
+interface SettingsManager
+{
+    public function scope(?SettingsScope $scope): static;
+
+
+    public function get(string $key, mixed $default = null): mixed;
+
+
+    public function set(string $key, mixed $value): static;
+
+
+    public function all(?string $prefix = null): array;
+
+
+    public function has(string $key): bool;
+
+
+    public function forget(string $key): void;
+}
+Resolver: ValueCaster.php
+<?php
+
+
+namespace Vendor\Settings\Resolvers;
+
+
+class ValueCaster
+{
+    public static function cast(string $type, mixed $value): mixed
+    {
+        return match ($type) {
+            'integer' => (int) $value,
+            'float' => (float) $value,
+            'boolean' => filter_var($value, FILTER_VALIDATE_BOOL),
+            'array' => (array) $value,
+            'object' => (object) $value,
+            'json' => $value,
+            'string' => (string) $value,
+            default => $value,
+        };
+    }
+}
+Resolver: ScopeHierarchyResolver.php
+<?php
+
+
+namespace Vendor\Settings\Resolvers;
+
+
+use Vendor\Settings\Contracts\SettingsScope;
+
+
+class ScopeHierarchyResolver
+{
+    public function resolve(?SettingsScope $scope): array
+    {
+        if (! $scope) {
+            return [
+                [
+                    'scope_type' => 'global',
+                    'scope_id' => null,
+                ],
+            ];
+        }
+
+
+        $resolved = [
+            [
+                'scope_type' => $scope->getSettingsScopeType(),
+                'scope_id' => (string) $scope->getSettingsScopeId(),
+            ],
+        ];
+
+
+        foreach ($scope->getSettingsFallbackScopes() as $fallback) {
+            $resolved[] = [
+                'scope_type' => $fallback->getSettingsScopeType(),
+                'scope_id' => (string) $fallback->getSettingsScopeId(),
+            ];
+        }
+
+
+        $resolved[] = [
+            'scope_type' => 'global',
+            'scope_id' => null,
+        ];
+
+
+        return $resolved;
+    }
+}
+Repository: DatabaseSettingsRepository.php
+<?php
+    public function get(string $key, mixed $default = null): mixed
+    {
+        $definition = SettingDefinition::query()
+            ->where('key', $key)
+            ->first();
+
+
+        if (! $definition) {
+            return $default;
+        }
+
+
+        foreach ($this->resolver->resolve($this->scope) as $scope) {
+            $value = SettingValue::query()
+                ->where('setting_definition_id', $definition->id)
+                ->where('scope_type', $scope['scope_type'])
+                ->where('scope_id', $scope['scope_id'])
+                ->first();
+
+
+            if ($value) {
+                return ValueCaster::cast(
+                    $definition->data_type,
+                    $value->value
+                );
+            }
+        }
+
+
+        return ValueCaster::cast(
+            $definition->data_type,
+            $definition->default_value ?? $default
+        );
+    }
+
+
+    public function set(string $key, mixed $value): void
+    {
+        $definition = SettingDefinition::query()->firstOrCreate(
+            ['key' => $key],
+            [
+                'group' => str($key)->before('.')->toString(),
+                'data_type' => gettype($value),
+            ]
+        );
+
+
+        $scopeType = $this->scope?->getSettingsScopeType() ?? 'global';
+        $scopeId = $this->scope?->getSettingsScopeId();
+
+
+        SettingValue::query()->updateOrCreate(
+            [
+                'setting_definition_id' => $definition->id,
+                'scope_type' => $scopeType,
+                'scope_id' => $scopeId,
+            ],
+            [
+                'value' => $value,
+            ]
+        );
+    }
+
+
+    public function has(string $key): bool
+    {
+        return ! is_null($this->get($key));
+    }
+
+
+    public function forget(string $key): void
+    {
+        $definition = SettingDefinition::query()
+            ->where('key', $key)
+            ->first();
+
+
+        if (! $definition) {
+            return;
+        }
+
+
+        SettingValue::query()
+            ->where('setting_definition_id', $definition->id)
+            ->delete();
+    }
+
+
+    public function all(?string $prefix = null): array
+    {
+        $definitions = SettingDefinition::query()
+            ->when($prefix, function ($query) use ($prefix) {
+                $query->where('key', 'LIKE', $prefix . '.%');
+Repository: CachedSettingsRepository.php
+<?php
+
+
+namespace Vendor\Settings\Repositories;
+
+
+use Illuminate\Support\Facades\Cache;
+use Vendor\Settings\Contracts\SettingsRepository;
+
+
+class CachedSettingsRepository implements SettingsRepository
+{
+    public function __construct(
+        protected SettingsRepository $repository,
+        protected string $cachePrefix = 'settings',
+        protected int $ttl = 3600,
+    ) {}
+
+
+    public function get(string $key, mixed $default = null): mixed
+    {
+        return Cache::remember(
+            $this->cacheKey($key),
+            $this->ttl,
+            fn () => $this->repository->get($key, $default)
+        );
+    }
+
+
+    public function set(string $key, mixed $value): void
+    {
+        $this->repository->set($key, $value);
+
+
+        Cache::forget($this->cacheKey($key));
+    }
+
+
+    public function has(string $key): bool
+    {
+        return $this->repository->has($key);
+    }
+
+
+    public function forget(string $key): void
+    {
+        $this->repository->forget($key);
+
+
+        Cache::forget($this->cacheKey($key));
+    }
+
+
+    public function all(?string $prefix = null): array
+    {
+        return $this->repository->all($prefix);
+    }
+
+
+    protected function cacheKey(string $key): string
+    {
+        return $this->cachePrefix . ':' . $key;
+    }
+}
+Manager: SettingsManager.php
+<?php
+use Vendor\Settings\Repositories\DatabaseSettingsRepository;
+
+
+class SettingsManager implements SettingsManagerContract
+{
+    protected ?SettingsScope $scope = null;
+
+
+    protected SettingsRepository $repository;
+
+
+    public function __construct()
+    {
+        $this->repository = new CachedSettingsRepository(
+            new DatabaseSettingsRepository()
+        );
+    }
+
+
+    public function scope(?SettingsScope $scope): static
+    {
+        $clone = clone $this;
+
+
+        $clone->scope = $scope;
+
+
+        $clone->repository = new CachedSettingsRepository(
+            new DatabaseSettingsRepository($scope)
+        );
+
+
+        return $clone;
+    }
+
+
+    public function get(string $key, mixed $default = null): mixed
+    {
+        if ($this->hasSubtree($key)) {
+            return $this->all($key);
+        }
+
+
+        return $this->repository->get($key, $default);
+    }
+
+
+    public function set(string $key, mixed $value): static
+    {
+        $this->repository->set($key, $value);
+
+
+        return $this;
+    }
+
+
+    public function all(?string $prefix = null): array
+    {
+        return $this->repository->all($prefix);
+    }
+
+
+    public function has(string $key): bool
+    {
+        return $this->repository->has($key);
+    }
+
+
+    public function forget(string $key): void
+    {
+        $this->repository->forget($key);
+    }
+
+
+    protected function hasSubtree(string $key): bool
+    {
+        return \Vendor\Settings\Models\SettingDefinition::query()
+            ->where('key', 'LIKE', $key . '.%')
+            ->exists();
+    }
+}
+Facade: Settings.php
+<?php
+
+
+namespace Vendor\Settings\Facades;
+
+
+use Illuminate\Support\Facades\Facade;
+
+
+class Settings extends Facade
+{
+    protected static function getFacadeAccessor(): string
+    {
+        return 'settings';
+    }
+}
+Support: Scope.php
+<?php
+
+
+namespace Vendor\Settings\Support;
+
+
+use Vendor\Settings\Managers\SettingsManager;
+
+
+class Scope extends SettingsManager
+{
+}
+helpers.php
+<?php
+
+
+use Vendor\Settings\Managers\SettingsManager;
+
+
+if (! function_exists('settings')) {
+    function settings(): SettingsManager
+    {
+        return app('settings');
+    }
+}
+Service Provider: SettingsServiceProvider.php
+<?php
+
+
+namespace Vendor\Settings;
+
+
+use Illuminate\Support\ServiceProvider;
+use Vendor\Settings\Managers\SettingsManager;
+
+
+class SettingsServiceProvider extends ServiceProvider
+{
+    public function register(): void
+    {
+        $this->app->singleton('settings', function () {
+            return new SettingsManager();
+        });
+    }
+
+
+    public function boot(): void
+    {
+        $this->loadMigrationsFrom(__DIR__ . '/../database/migrations');
+
+
+        require_once __DIR__ . '/helpers.php';
+    }
+}
+Example Usage
+User Model
+<?php
+
+
+namespace App\Models;
+
+
+use Illuminate\Foundation\Auth\User as Authenticatable;
+use Vendor\Settings\Contracts\SettingsScope;
+use Vendor\Settings\Traits\HasSettings;
+
+
+class User extends Authenticatable implements SettingsScope
+{
+    use HasSettings;
+
+
+    public function getSettingsFallbackScopes(): array
+    {
+        return [
+            $this->team,
+            $this->company,
+        ];
+    }
+}
+Example Usage
+settings()->set('ui.theme', 'dark');
+
+
+settings()->get('ui.theme');
+
+
+settings()->get('ui');
+
+
+settings()->scope($user)->get('ui.theme');
+
+
+settings()->scope($user)->set('ui.language', 'en');
+
+
+settings()->scope($company)->set('invoice.prefix', 'INV');
+Recommended Future Features
+Redis tag-based cache invalidation
+Event system
+Audit logs
+Versioning/history
+Multi-tenant isolation
+Encrypted values
+Typed DTOs
+Settings UI generator
+Settings permissions
+Settings export/import
+Module auto-registration
+Settings observers
+GraphQL support
+REST API support
+Environment fallback
+CLI commands
+Queue-based cache warmup
+
+I’ve created a complete Laravel hierarchical multi-scope settings package blueprint including:
+
+Migrations
+Models
+Contracts
+Scope system
+Traits
+Repositories
+Cached repository layer
+Hierarchical fallback resolver
+Value casting
+Facade
+Service provider
+Helper function
+Example usage
+Recommended package structure
+Enterprise-ready architecture
+
+The design supports:
+
+Global settings
+User settings
+Team/project/company scopes
+Hierarchical inheritance
+Dot notation
+Nested retrieval
+Cache-friendly architecture
+Extensible enterprise systems (ERP/HMS/CRM/SaaS
